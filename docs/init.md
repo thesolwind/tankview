@@ -77,6 +77,34 @@ Without a path, the current folder is used.
 - It never runs git, commits, or touches your source code.
 - Running it twice is safe: the second run reports everything as unchanged.
 
+## 🧹 Removing it
+
+`tankview remove` undoes `init`. Like `init`, it only previews unless you
+add `--apply`:
+
+```sh
+npx tankview remove path/to/your-repo           # preview: changes nothing
+npx tankview remove path/to/your-repo --apply   # make the changes
+```
+
+It takes out only what `init` added:
+
+| What | What happens |
+|---|---|
+| Agent files | deleted if they still match tankview's template; an agent you edited is kept, and the preview says so |
+| `CLAUDE.md` | the section between the `tankview:orchestration` markers is cut out, and the rest of your text stays exactly as it was; if nothing else is left, the file is deleted |
+| `settings.json` | `"model": "sonnet"` is removed and the rest stays as it was; a different model is kept; if the file would be empty, it's deleted |
+| Proposal files | `.claude/tankview/proposed/` is deleted |
+| Folders | `.claude/agents/` and `.claude/` are removed only if they end up empty |
+
+Your own agents, and any other files in `.claude/`, are never touched. If
+you set up the agents with `init --from <folder>`, pass the same
+`--from <folder>` to `remove`, so it can recognize them.
+
+One thing to know: `init` only adds `"model": "sonnet"` when no model is set,
+but `remove` can't tell whether you had set `"sonnet"` yourself before. If you
+had, put it back after removing.
+
 ## ☕ Spring projects
 
 When the repository uses Spring (a `springframework` dependency or

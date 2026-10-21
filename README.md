@@ -54,6 +54,8 @@ Node 22+. Nothing else to install.
 tankview                          # open the console; follows your most active session
 tankview init ./my-repo           # preview an agent team for a repo (changes nothing)
 tankview init ./my-repo --apply   # ...and set it up
+tankview remove ./my-repo         # preview taking it out again
+tankview remove ./my-repo --apply # ...and remove it
 ```
 
 Open tankview in a terminal next to your Claude Code session. It picks up
@@ -74,7 +76,9 @@ new sessions and subagents by itself.
 
 Without `--apply` it only shows what it would do, as diffs. It never
 overwrites your agents, your `CLAUDE.md` or your settings, and it adds a
-Spring checklist when the project uses Spring.
+Spring checklist when the project uses Spring. Changed your mind?
+`tankview remove` takes out exactly what `init` added, and keeps anything
+you've edited since.
 
 📖 See **[the agent team guide](docs/init.md)** for what each file contains,
 the safety rules, custom templates, and how to check the models in use.
@@ -109,7 +113,7 @@ Code:
 
 | | |
 |---|---|
-| 🏗️ [The agent team guide](docs/init.md) | `tankview init`: the agents, the safety rules, custom templates |
+| 🏗️ [The agent team guide](docs/init.md) | `tankview init` and `remove`: the agents, the safety rules, custom templates |
 | ⚡ [Live hooks](docs/hooks.md) | the plugin, `install-hooks`, and what gets recorded |
 | 📊 [Reading the numbers](docs/numbers.md) | read, wrote, cached, context, and the cost estimate |
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { render } from "ink";
-import { applyInit, BUILTIN_TEMPLATES, planInit, renderReport } from "./init.js";
+import { applyInit, applyRemove, BUILTIN_TEMPLATES, planInit, planRemove, renderReport } from "./init.js";
 import { EVENTS, install, uninstall } from "./install.js";
 import { EVENTS_FILE, Store } from "./model.js";
 import { App } from "./ui.js";
@@ -14,7 +14,12 @@ Usage:
     --apply                    write the files
     --from <folder>            use your own templates (agents/*.md, claude-section.md,
                                optional java-spring.md) instead of the built-in ones
-  tankview install-hooks       add the live-feed hooks to ~/.claude/settings.json
+  tankview remove [repo]       undo init: delete the agents it added (unless you edited
+                               them), its CLAUDE.md section and "model": "sonnet"
+                               (preview: prints the plan and diffs, changes nothing)
+    --apply                    make the changes
+    --from <folder>            the templates you used with init --from
+  tankview install-hooks      add the live-feed hooks to ~/.claude/settings.json
   tankview uninstall-hooks     remove them
     --project                  use ./.claude/settings.local.json instead
 
@@ -27,7 +32,7 @@ from inside Claude Code:
 const [cmd, ...rest] = process.argv.slice(2);
 const project = rest.includes("--project");
 
-if (cmd === "init") {
+if (cmd === "init" || cmd === "remove") {
   const fromIdx = rest.indexOf("--from");
   const from = fromIdx >= 0 ? rest[fromIdx + 1] : undefined;
   if (fromIdx >= 0 && !from) {
@@ -37,9 +42,10 @@ if (cmd === "init") {
   // The repo is the first argument that is neither a flag nor the value of --from.
   const target = rest.find((a, i) => !a.startsWith("--") && !(fromIdx >= 0 && i === fromIdx + 1)) ?? ".";
   try {
-    const report = planInit(target, from ?? BUILTIN_TEMPLATES);
+    const templates = from ?? BUILTIN_TEMPLATES;
+    const report = cmd === "init" ? planInit(target, templates) : planRemove(target, templates);
     const apply = rest.includes("--apply");
-    if (apply) applyInit(report);
+    if (apply) (cmd === "init" ? applyInit : applyRemove)(report);
     console.log(renderReport(report, { color: Boolean(process.stdout.isTTY), applied: apply }));
   } catch (err) {
     console.error(String(err instanceof Error ? err.message : err));

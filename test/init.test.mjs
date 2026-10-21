@@ -35,7 +35,7 @@ test("fresh repo: dry run writes nothing, apply creates everything, re-run is a 
     ".claude/settings.json": "create",
   });
   assert.equal(existsSync(join(dir, ".claude")), false, "dry run must not write");
-  assert.match(renderReport(report, { color: false, applied: false }), /Dry run: nothing was written/);
+  assert.match(renderReport(report, { color: false, applied: false }), /Dry run: nothing was changed/);
 
   applyInit(report);
   assert.match(read(dir, ".claude/agents/architect.md"), /^model: opus$/m);

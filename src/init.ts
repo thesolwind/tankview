@@ -4,7 +4,7 @@
 //   - CLAUDE.md gets one marked section; text outside the markers is never touched
 //   - settings.json gains "model" only when no model is set
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,7 +22,7 @@ const MAIN_MODEL = "sonnet";
 const SPRING_AGENTS = ["architect.md", "audit.md"];
 const SKIP_DIRS = new Set([".git", "node_modules", "build", "target", "dist", ".gradle", ".venv", ".pio", ".idea", "out"]);
 
-export type Kind = "create" | "update" | "unchanged" | "conflict" | "skipped";
+export type Kind = "create" | "update" | "unchanged" | "conflict" | "skipped" | "delete";
 
 export interface Action {
   rel: string; // path shown to the user, relative to the target
@@ -65,12 +65,8 @@ export function planInit(targetDir: string, templatesDir = BUILTIN_TEMPLATES): R
   const userAgents = readAgentNames(join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "agents"));
 
   // ---- agents ----
-  const springText = spring && existsSync(join(templatesDir, "java-spring.md"))
-    ? readFileSync(join(templatesDir, "java-spring.md"), "utf8")
-    : "";
-  for (const file of readdirSync(agentsTpl).filter((f) => f.endsWith(".md")).sort()) {
-    let content = readFileSync(join(agentsTpl, file), "utf8");
-    if (springText && SPRING_AGENTS.includes(file)) content = content.trimEnd() + "\n" + springText;
+  for (const { file, plain, withSpring } of agentTemplates(templatesDir)) {
+    const content = spring ? withSpring : plain;
     const name = frontmatterName(content) ?? file.replace(/\.md$/, "");
     const dest = join(agentsDir, file);
     const taken = existing.get(name);
@@ -169,6 +165,133 @@ export function applyInit(report: Report): Action[] {
   return written;
 }
 
+/** Each agent template, plain and with the Spring checklist appended where it applies. */
+function agentTemplates(templatesDir: string): { file: string; plain: string; withSpring: string }[] {
+  const springPath = join(templatesDir, "java-spring.md");
+  const springText = existsSync(springPath) ? readFileSync(springPath, "utf8") : "";
+  return readdirSync(join(templatesDir, "agents")).filter((f) => f.endsWith(".md")).sort().map((file) => {
+    const plain = readFileSync(join(templatesDir, "agents", file), "utf8");
+    const withSpring = springText && SPRING_AGENTS.includes(file) ? plain.trimEnd() + "\n" + springText : plain;
+    return { file, plain, withSpring };
+  });
+}
+
+// ---- remove ---------------------------------------------------------------------------
+// `tankview remove <repo>` undoes init, touching only what init added: agents that still match
+// a template, the marked CLAUDE.md section, "model": "sonnet", and init's proposal files.
+
+const PROPOSAL_DIRS = [join(".claude", "tankview", "proposed"), join(".claude", "agents-monitor", "proposed")];
+// Removed after --apply when they end up empty, deepest first.
+const PRUNE_DIRS = [...PROPOSAL_DIRS, join(".claude", "tankview"), join(".claude", "agents-monitor"), join(".claude", "agents"), ".claude"];
+
+const sameText = (a: string, b: string) => a.replace(/\r\n/g, "\n") === b.replace(/\r\n/g, "\n");
+
+export function planRemove(targetDir: string, templatesDir = BUILTIN_TEMPLATES): Report {
+  const target = resolve(targetDir);
+  if (!existsSync(target) || !statSync(target).isDirectory()) throw new Error(`Not a directory: ${target}`);
+  if (!existsSync(join(templatesDir, "agents"))) throw new Error(`Templates folder must contain agents/*.md: ${templatesDir}`);
+  const findings: string[] = [];
+  const actions: Action[] = [];
+  const rel = (p: string) => relative(target, p).replaceAll("\\", "/");
+
+  // ---- agents: only exact template copies ----
+  const agentsDir = join(target, ".claude", "agents");
+  for (const { file, plain, withSpring } of agentTemplates(templatesDir)) {
+    const path = join(agentsDir, file);
+    if (!existsSync(path)) continue;
+    const current = readFileSync(path, "utf8");
+    if (sameText(current, plain) || sameText(current, withSpring)) {
+      actions.push({ rel: rel(path), abs: path, kind: "delete", before: current, after: "" });
+    } else {
+      actions.push({
+        rel: rel(path), abs: path, kind: "skipped", before: current, after: current,
+        note: "differs from tankview's template (edited, or from another version): kept; delete it yourself if you don't need it",
+      });
+    }
+  }
+
+  // ---- proposal files from init ----
+  for (const dir of PROPOSAL_DIRS) {
+    const abs = join(target, dir);
+    if (!existsSync(abs)) continue;
+    for (const f of readdirSync(abs).sort()) {
+      const path = join(abs, f);
+      if (statSync(path).isFile()) {
+        actions.push({ rel: rel(path), abs: path, kind: "delete", before: readFileSync(path, "utf8"), after: "" });
+      }
+    }
+  }
+
+  // ---- CLAUDE.md: cut out the marked section ----
+  for (const claudeMd of [join(target, "CLAUDE.md"), join(target, ".claude", "CLAUDE.md")]) {
+    if (!existsSync(claudeMd)) continue;
+    const before = readFileSync(claudeMd, "utf8");
+    const pair = MARKER_PAIRS.find(([a, b]) => before.indexOf(a) >= 0 && before.indexOf(b) > before.indexOf(a));
+    if (!pair) continue;
+    const head = before.slice(0, before.indexOf(pair[0])).replace(/\s+$/, "");
+    const tail = before.slice(before.indexOf(pair[1]) + pair[1].length).replace(/^\s+/, "");
+    const rest = [head, tail].filter(Boolean).join("\n\n");
+    if (rest.trim()) {
+      actions.push({ rel: rel(claudeMd), abs: claudeMd, kind: "update", before, after: rest.replace(/\s*$/, "\n") });
+    } else {
+      actions.push({ rel: rel(claudeMd), abs: claudeMd, kind: "delete", before, after: "", note: "only had tankview's section" });
+    }
+  }
+
+  // ---- settings.json: drop "model": "sonnet" ----
+  const settings = join(target, ".claude", "settings.json");
+  if (existsSync(settings)) {
+    const before = readFileSync(settings, "utf8");
+    let obj: Record<string, unknown> | null = null;
+    try {
+      obj = JSON.parse(before);
+    } catch {
+      findings.push(".claude/settings.json isn't valid JSON, so it was left alone");
+    }
+    if (obj && obj.model === MAIN_MODEL) {
+      const { model: _, ...others } = obj;
+      if (!Object.keys(others).length) {
+        actions.push({ rel: rel(settings), abs: settings, kind: "delete", before, after: "", note: `only set "model": "${MAIN_MODEL}"` });
+      } else {
+        // Remove the line as text so the rest keeps its formatting; fall back to re-serializing.
+        let after = before.replace(/^[ \t]*"model"\s*:\s*"sonnet"\s*,?[ \t]*\r?\n/m, "");
+        try {
+          JSON.parse(after);
+        } catch {
+          after = JSON.stringify(others, null, 2) + "\n";
+        }
+        actions.push({
+          rel: rel(settings), abs: settings, kind: "update", before, after,
+          note: `removes "model": "${MAIN_MODEL}", which init adds; the rest stays`,
+        });
+      }
+    } else if (obj && obj.model !== undefined) {
+      findings.push(`.claude/settings.json sets model ${JSON.stringify(obj.model)}, not tankview's "${MAIN_MODEL}": kept`);
+    }
+  }
+
+  if (!actions.some((a) => a.kind === "delete" || a.kind === "update")) findings.push("nothing from tankview init found");
+  else findings.push("folders that end up empty (.claude/agents, .claude) are removed too");
+  return { target, findings, actions };
+}
+
+export function applyRemove(report: Report): Action[] {
+  const changed = report.actions.filter((a) => a.kind === "delete" || a.kind === "update");
+  for (const a of changed) {
+    if (a.kind === "delete") rmSync(a.abs, { force: true });
+    else writeFileSync(a.abs, a.after);
+  }
+  for (const dir of PRUNE_DIRS) {
+    const abs = join(report.target, dir);
+    try {
+      if (statSync(abs).isDirectory() && readdirSync(abs).length === 0) rmdirSync(abs);
+    } catch {
+      // missing or not empty: leave it
+    }
+  }
+  return changed;
+}
+
 // ---- inspection helpers -----------------------------------------------------------
 
 function frontmatterName(text: string): string | undefined {
@@ -242,7 +365,7 @@ function detectSpring(root: string): string | null {
 
 const ANSI = { green: "\x1b[32m", red: "\x1b[31m", cyan: "\x1b[36m", yellow: "\x1b[33m", dim: "\x1b[2m", bold: "\x1b[1m", reset: "\x1b[0m" };
 const LABEL: Record<Kind, string> = {
-  create: "create", update: "update", unchanged: "unchanged", conflict: "proposal", skipped: "skipped",
+  create: "create", update: "update", unchanged: "unchanged", conflict: "proposal", skipped: "skipped", delete: "delete",
 };
 
 export function renderReport(report: Report, opts: { color: boolean; applied: boolean }): string {
@@ -254,7 +377,9 @@ export function renderReport(report: Report, opts: { color: boolean; applied: bo
   out.push("", c("bold", "Plan"));
   const width = Math.max(...report.actions.map((a) => a.rel.length));
   for (const a of report.actions) {
-    const color = a.kind === "create" || a.kind === "update" ? "green" : a.kind === "conflict" || a.kind === "skipped" ? "yellow" : "dim";
+    const color = a.kind === "create" || a.kind === "update" ? "green"
+      : a.kind === "delete" ? "red"
+      : a.kind === "conflict" || a.kind === "skipped" ? "yellow" : "dim";
     const note = a.note ? a.rel.padEnd(width) + c("dim", `  (${a.note})`) : a.rel;
     out.push(`  ${c(color, LABEL[a.kind].padEnd(9))} ${note}`);
   }
@@ -267,10 +392,13 @@ export function renderReport(report: Report, opts: { color: boolean; applied: bo
     }
   }
   out.push("");
-  const changes = report.actions.filter((a) => a.kind === "create" || a.kind === "update" || a.kind === "conflict").length;
-  if (opts.applied) out.push(c("green", `Done: wrote ${changes} file(s). Nothing else was changed.`));
-  else if (changes) out.push(c("yellow", `Dry run: nothing was written. Re-run with --apply to write ${changes} file(s).`));
-  else out.push(c("green", "Already up to date: nothing to write."));
+  const writes = report.actions.filter((a) => a.kind === "create" || a.kind === "update" || a.kind === "conflict").length;
+  const deletes = report.actions.filter((a) => a.kind === "delete").length;
+  const parts = [writes && `${opts.applied ? "wrote" : "write"} ${writes} file(s)`, deletes && `${opts.applied ? "deleted" : "delete"} ${deletes} file(s)`]
+    .filter(Boolean).join(" and ");
+  if (opts.applied) out.push(c("green", parts ? `Done: ${parts}. Nothing else was changed.` : "Nothing to change."));
+  else if (parts) out.push(c("yellow", `Dry run: nothing was changed. Re-run with --apply to ${parts}.`));
+  else out.push(c("green", "Nothing to change."));
   return out.join("\n");
 }
 
