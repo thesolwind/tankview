@@ -1,12 +1,14 @@
 // Builds a made-up Claude Code session with four subagents in a temp folder and prints one
-// rendered frame of the monitor, for the README. Usage: npm run demo [-- cols rows]
+// rendered frame of the monitor, for the README. Usage: npm run demo [-- cols rows] [--ansi]
+// --ansi keeps the terminal colors; scripts/screenshot.mjs turns that into a PNG.
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const [cols = "118", rows = "42"] = process.argv.slice(2);
+const ansi = process.argv.includes("--ansi");
+const [cols = "118", rows = "42"] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const root = mkdtempSync(join(tmpdir(), "tankview-demo-"));
 const projects = join(root, "projects");
 const events = join(root, "tankview", "events.jsonl");
@@ -119,5 +121,8 @@ writeJsonl(join(projects, "-home-dev-docs-site", "7c3a9f10-demo-4d22-9a00-docssi
 mkdirSync(join(events, ".."), { recursive: true });
 writeFileSync(events, JSON.stringify({ session_id: sid, hook_event_name: "PreToolUse", tool_name: "Agent", tool_use_id: `toolu_${msg}`, tool_input: { description: "Review export design" }, ts: (now - 3000) / 1000 }) + "\n");
 
-const frame = execFileSync(process.execPath, [new URL("../test/frame.mjs", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), "follow", cols, rows, projects, events], { encoding: "utf8" });
-process.stdout.write(frame.replace(/\d{1,2}:\d{2}:\d{2}( [AP]M)?(?= *$)/m, "").replace(/\s+$/gm, ""));
+const frame = execFileSync(process.execPath, [new URL("../test/frame.mjs", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), "follow", cols, rows, projects, events], {
+  encoding: "utf8",
+  env: ansi ? { ...process.env, RAW: "1", FORCE_COLOR: "3" } : process.env,
+});
+process.stdout.write(ansi ? frame : frame.replace(/\d{1,2}:\d{2}:\d{2}( [AP]M)?(?= *$)/m, "").replace(/\s+$/gm, ""));

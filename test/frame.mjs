@@ -41,6 +41,7 @@ if (target !== "follow") {
 for (const k of process.env.KEYS ?? "") press(k);
 await new Promise((r) => setTimeout(r, 400));
 const strip = (s) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
-console.log(strip(stdout.frames.at(-1)));
+// RAW=1 keeps the ANSI colors (set FORCE_COLOR=3 too, the fake terminal isn't detected as color-capable).
+console.log(process.env.RAW ? stdout.frames.at(-1) : strip(stdout.frames.at(-1)));
 app.unmount();
 process.exit(0);

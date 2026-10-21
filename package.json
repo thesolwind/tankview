@@ -17,7 +17,8 @@
     "start": "node dist/cli.js",
     "test": "tsc && node --test test/*.test.mjs",
     "demo": "tsc && node scripts/demo.mjs",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm test",
+    "screenshot": "tsc && node scripts/screenshot.mjs"
   },
   "engines": {
     "node": ">=22"
