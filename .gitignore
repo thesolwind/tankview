@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tgz
+
+# old Python prototype and local preview leftovers
+agents_monitor/
+agents_monitor.egg-info/
+pyproject.toml
+.venv/
+__pycache__/
+shots/
+.claude/launch.json

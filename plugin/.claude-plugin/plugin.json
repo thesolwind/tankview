@@ -1,0 +1,14 @@
+{
+  "name": "tankview",
+  "displayName": "Tankview",
+  "version": "0.1.0",
+  "description": "Live hook feed for the tankview terminal monitor (npx tankview): records session, tool and subagent events",
+  "author": {
+    "name": "thesolwind",
+    "url": "https://github.com/thesolwind"
+  },
+  "homepage": "https://github.com/thesolwind/tankview",
+  "repository": "https://github.com/thesolwind/tankview",
+  "license": "MIT",
+  "keywords": ["monitoring", "subagents", "hooks", "tui"]
+}

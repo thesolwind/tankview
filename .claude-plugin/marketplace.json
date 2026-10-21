@@ -1,0 +1,14 @@
+{
+  "name": "tankview",
+  "description": "Claude Code plugin for tankview, a live terminal monitor for Claude Code sessions and subagents",
+  "owner": {
+    "name": "thesolwind"
+  },
+  "plugins": [
+    {
+      "name": "tankview",
+      "source": "./plugin",
+      "description": "Live hook feed for the tankview terminal monitor"
+    }
+  ]
+}

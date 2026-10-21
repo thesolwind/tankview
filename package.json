@@ -1,0 +1,59 @@
+{
+  "name": "tankview",
+  "version": "0.1.0",
+  "description": "Operator console for Claude Code: watch your sessions and subagents live, and set up a Sonnet + Haiku + Opus agent team in any repo",
+  "type": "module",
+  "bin": {
+    "tankview": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "plugin/hooks/record.mjs",
+    "templates"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/cli.js",
+    "test": "tsc && node --test test/*.test.mjs",
+    "demo": "tsc && node scripts/demo.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "subagents",
+    "agents",
+    "monitor",
+    "tui",
+    "terminal",
+    "ink",
+    "hooks"
+  ],
+  "author": "thesolwind (https://github.com/thesolwind)",
+  "license": "MIT",
+  "homepage": "https://github.com/thesolwind/tankview#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thesolwind/tankview.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thesolwind/tankview/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "ink": "^8.0.0",
+    "react": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.3.0",
+    "ink-testing-library": "^4.0.0",
+    "typescript": "^7.0.2"
+  }
+}
