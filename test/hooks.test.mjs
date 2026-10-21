@@ -83,6 +83,25 @@ test("transcript and hook report the same tool call once", () => {
   assert.equal(s.main.model, "claude-sonnet-5-5");
 });
 
+test("Claude Code's background helpers (empty agent_type) get no card", () => {
+  // Payload shape as seen from Claude Code: a prompt suggestion and a session recap.
+  hook({ hook_event_name: "SubagentStart", agent_id: "ad27fea0d8c4e9cf5", agent_type: "" });
+  hook({ hook_event_name: "SubagentStop", agent_id: "ad27fea0d8c4e9cf5", agent_type: "", last_assistant_message: "push the branch" });
+  hook({ hook_event_name: "SubagentStop", agent_id: "a853f7d87e5a1f257", agent_type: "", last_assistant_message: "We're verifying the fix." });
+  // A helper that does real work is shown after all.
+  hook({ hook_event_name: "SubagentStart", agent_id: "aworker000000001", agent_type: "" });
+  hook({ hook_event_name: "PreToolUse", agent_id: "aworker000000001", agent_type: "", tool_name: "Read", tool_use_id: "w1", tool_input: { file_path: "a.ts" } });
+
+  const store = new Store(join(cfg, "projects"));
+  store.refresh();
+  const s = store.sessions.get("demo");
+  assert.ok(!s.subagents.has("ad27fea0d8c4e9cf5"));
+  assert.ok(!s.subagents.has("a853f7d87e5a1f257"));
+  assert.ok(s.subagents.has("aworker000000001"));
+  assert.ok(s.backgroundHelpers.has("ad27fea0d8c4e9cf5"));
+  assert.ok(!s.log.some((e) => e.text === "finished" && e.detail === "0 tool calls" && e.agent.startsWith("ad27fea0")));
+});
+
 test("a subagent that finishes through SubagentHandback is done, not stalled", () => {
   const subDir = join(dirname(transcript), "demo", "subagents");
   mkdirSync(subDir, { recursive: true });

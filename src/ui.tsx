@@ -236,7 +236,9 @@ function Lead({ session: s, width, showCost, sessionCost }: { session: Session; 
 }
 
 function SwarmLine({ session: s, agents, showCost }: { session: Session; agents: Agent[]; showCost: boolean }) {
-  if (!agents.length) return <Text color={C.dim}>  no subagents in this session yet</Text>;
+  const helpers = s.backgroundHelpers.size;
+  const hidden = helpers ? ` · ${plural(helpers, "background helper run")} hidden (prompt suggestions, recaps)` : "";
+  if (!agents.length) return <Text color={C.dim} wrap="truncate">  no subagents in this session yet{hidden}</Text>;
   let read = 0, cached = 0, wrote = 0;
   let cost: number | null = null;
   for (const a of agents) {
@@ -257,6 +259,7 @@ function SwarmLine({ session: s, agents, showCost }: { session: Session; agents:
       <Text color={C.blue}>  subagents read {fmtTokens(read)} ({fmtTokens(cached)} cached) · wrote {fmtTokens(wrote)}</Text>
       {showCost && <Text color={C.yellow}> · {fmtCost(cost)}</Text>}
       <Text color={C.green}>  · main context {fmtTokens(s.main.lastContext)}</Text>
+      {helpers > 0 && <Text color={C.dim}> · {plural(helpers, "helper")} hidden</Text>}
     </Text>
   );
 }

@@ -210,6 +210,7 @@ export class Session {
   subagents = new Map<string, Agent>();
   log: LogEvent[] = [];
   logSeq = 0;
+  backgroundHelpers = new Set<string>(); // ids of Claude Code's helper runs, kept off the cards
   mtimes = new Map<string, number>(); // agent id -> file mtime ("hook" -> last hook event)
   private offsets = new Map<string, number>();
   private logged = new Set<string>(); // dedup keys shared by transcript and hook events
@@ -415,6 +416,14 @@ export class Session {
     this.cwd = ev.cwd ?? this.cwd;
     if (ev.session_title) this.title = ev.session_title;
 
+    // Claude Code's own background helpers (next-prompt suggestions, session recaps) fire
+    // SubagentStart/Stop with an empty agent_type. They get no card unless they show up with real
+    // work: a transcript file or a tool call creates the agent through the normal path.
+    if ((name === "SubagentStart" || name === "SubagentStop") && ev.agent_id && !ev.agent_type
+      && !this.subagents.has(ev.agent_id)) {
+      this.backgroundHelpers.add(ev.agent_id);
+      return;
+    }
     const agent = ev.agent_id ? this.subagent(ev.agent_id, ev.agent_type ?? "") : this.main;
     agent.hookTs = Math.max(agent.hookTs, ts);
     const toolId: string = ev.tool_use_id ?? "";
