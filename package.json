@@ -1,6 +1,6 @@
 {
   "name": "tankview",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Operator console for Claude Code: watch your sessions and subagents live, and set up a Sonnet + Haiku + Opus agent team in any repo",
   "type": "module",
   "bin": {
