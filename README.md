@@ -8,8 +8,8 @@ work in real time: which model each one runs on, what tool it's using right
 now, how much it has read and written, and what it costs.
 
 And when you want your own agent team, one command gives any repository a
-Sonnet + Haiku + Opus setup: cheap, fast agents for searching and checking,
-and a senior architect for the hard calls.
+multi-model setup: cheap, fast agents for searching, reading logs and
+checking, and a senior architect for the hard calls.
 
 ```sh
 npx tankview
@@ -34,7 +34,7 @@ watching everyone inside, agents included.*
 - 🧠 **Know which model did what**: Haiku, Sonnet and Opus each in their own color, so you can see whether the cheap model really did the cheap work
 - 💸 **Optional cost estimate**: press `$` for an estimate per agent and per session
 - 📜 **One timeline**: every tool call, error and handoff from the main session and all its subagents in one log
-- 🏗️ **Agent team in one command**: `tankview init` sets up Haiku scouts and an Opus architect in any repo, and never overwrites your setup
+- 🏗️ **Agent team in one command**: `tankview init` sets up seven Haiku helpers and an architect in any repo, with a preset or the models you choose, and never overwrites your setup
 - ⚡ **Works with zero setup**: it reads the transcripts Claude Code already writes; add the plugin for instant updates
 - 🔒 **Local only**: reads files on your machine, makes no network requests
 
@@ -54,6 +54,7 @@ Node 22+. Nothing else to install.
 tankview                          # open the console; follows your most active session
 tankview init ./my-repo           # preview an agent team for a repo (changes nothing)
 tankview init ./my-repo --apply   # ...and set it up
+tankview init ./my-repo --preset quality --apply   # Opus main session, Fable architect
 tankview remove ./my-repo         # preview taking it out again
 tankview remove ./my-repo --apply # ...and remove it
 ```
@@ -63,16 +64,29 @@ new sessions and subagents by itself.
 
 ## 🏗️ An agent team for your repo
 
-`tankview init` adds five subagents and the rules for using them:
+`tankview init` adds eight subagents and the rules for using them. The
+helpers read a lot and report back a little, so the main session's context
+stays small:
 
-| Agent | Model | Job |
-|---|---|---|
-| main session | Sonnet | writes the code and makes the decisions |
-| `search` | Haiku | explores the repo and maps how it fits together |
-| `grep` | Haiku | finds usages, call sites, config references and tests |
-| `test` | Haiku | runs the relevant tests and explains failures |
-| `audit` | Haiku | reviews the diff before the work is called done |
-| `architect` | Opus | reviews designs and risky changes |
+| Agent | Job |
+|---|---|
+| main session | writes the code and makes the decisions |
+| `search` | explores the repo and maps how it fits together |
+| `grep` | finds usages, call sites, config references and tests |
+| `logs` | digs through long logs: device output, builds, CI, crash dumps |
+| `docs` | looks things up in docs, datasheets and on the web |
+| `history` | finds out why and when code changed, from git history |
+| `test` | builds the project and runs the relevant tests |
+| `audit` | reviews the diff before the work is called done |
+| `architect` | reviews designs and risky changes |
+
+Pick the models with a preset, or set each one with `--main`, `--scouts`
+and `--architect`:
+
+| Preset | Main session | Helpers | Architect |
+|---|---|---|---|
+| `balanced` (default) | Sonnet | Haiku | Opus |
+| `quality` | Opus | Haiku | Fable |
 
 Without `--apply` it only shows what it would do, as diffs. It never
 overwrites your agents, your `CLAUDE.md` or your settings, and it adds a
@@ -121,8 +135,9 @@ Code:
 
 tankview only reads local files: the transcripts in `~/.claude/projects` and,
 with the plugin, `~/.claude/tankview/events.jsonl`. It makes no network
-requests. The hook recorder keeps short previews of tool inputs and no tool
-output.
+requests. The hook recorder keeps short previews (up to 300 characters) of
+tool inputs, prompts, replies and error messages, and never the output of
+tools that succeed.
 
 ## Development
 

@@ -28,7 +28,10 @@ test("fresh repo: dry run writes nothing, apply creates everything, re-run is a 
   assert.deepEqual(kinds(report), {
     ".claude/agents/architect.md": "create",
     ".claude/agents/audit.md": "create",
+    ".claude/agents/docs.md": "create",
     ".claude/agents/grep.md": "create",
+    ".claude/agents/history.md": "create",
+    ".claude/agents/logs.md": "create",
     ".claude/agents/search.md": "create",
     ".claude/agents/test.md": "create",
     "CLAUDE.md": "create",
@@ -39,7 +42,10 @@ test("fresh repo: dry run writes nothing, apply creates everything, re-run is a 
 
   applyInit(report);
   assert.match(read(dir, ".claude/agents/architect.md"), /^model: opus$/m);
-  for (const a of ["search", "grep", "test", "audit"]) assert.match(read(dir, `.claude/agents/${a}.md`), /^model: haiku$/m);
+  for (const a of ["search", "grep", "logs", "docs", "history", "test", "audit"]) {
+    assert.match(read(dir, `.claude/agents/${a}.md`), /^model: haiku$/m);
+  }
+  assert.doesNotMatch(readdirSync(join(dir, ".claude/agents")).map((f) => read(dir, `.claude/agents/${f}`)).join(""), /\{\{/);
   assert.deepEqual(JSON.parse(read(dir, ".claude/settings.json")), { model: "sonnet" });
   assert.match(read(dir, "CLAUDE.md"), /tankview:orchestration:start[\s\S]*## Agent orchestration[\s\S]*orchestration:end/);
 
@@ -84,7 +90,7 @@ test("an agent name that is already taken is never overwritten; a proposal is wr
   assert.equal(read(dir, ".claude/agents/finder.md"), mine);
   assert.ok(!existsSync(join(dir, ".claude/agents/search.md")));
   assert.match(read(dir, ".claude/tankview/proposed/search.md"), /^model: haiku$/m);
-  assert.deepEqual(readdirSync(join(dir, ".claude/agents")).sort(), ["architect.md", "audit.md", "finder.md", "grep.md", "test.md"]);
+  assert.deepEqual(readdirSync(join(dir, ".claude/agents")).sort(), ["architect.md", "audit.md", "docs.md", "finder.md", "grep.md", "history.md", "logs.md", "test.md"]);
 });
 
 test("settings.json: existing model kept, missing model inserted without reformatting, invalid JSON untouched", () => {
@@ -119,9 +125,9 @@ test("Spring checklist only for Spring projects, only in architect and audit", (
 test("CLI: --from may come before the repo; custom templates are used", () => {
   const tpl = mkdtempSync(join(tmpdir(), "am-tpl-"));
   cpSync(BUILTIN_TEMPLATES, tpl, { recursive: true });
-  writeFileSync(join(tpl, "agents", "docs.md"), "---\nname: docs\ndescription: docs writer\nmodel: haiku\n---\nx\n");
+  writeFileSync(join(tpl, "agents", "notes.md"), "---\nname: notes\ndescription: notes writer\nmodel: haiku\n---\nx\n");
   const dir = repo();
   const out = execFileSync(process.execPath, [CLI, "init", "--from", tpl, dir, "--apply"], { encoding: "utf8" });
-  assert.match(out, /Done: wrote 8 file\(s\)/);
-  assert.ok(existsSync(join(dir, ".claude/agents/docs.md")));
+  assert.match(out, /Done: wrote 11 file\(s\)/);
+  assert.ok(existsSync(join(dir, ".claude/agents/notes.md")));
 });

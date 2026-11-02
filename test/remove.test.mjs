@@ -24,8 +24,8 @@ test("init then remove on a fresh repo leaves nothing behind; the preview change
   const dir = repo({ "src/main.c": "int main() {}\n" });
   applyInit(planInit(dir));
   const report = planRemove(dir);
-  assert.equal(Object.values(kinds(report)).filter((k) => k === "delete").length, 7);
-  assert.match(renderReport(report, { color: false, applied: false }), /Dry run: nothing was changed\. Re-run with --apply to delete 7 file\(s\)/);
+  assert.equal(Object.values(kinds(report)).filter((k) => k === "delete").length, 10);
+  assert.match(renderReport(report, { color: false, applied: false }), /Dry run: nothing was changed\. Re-run with --apply to delete 10 file\(s\)/);
   assert.ok(existsSync(join(dir, ".claude/agents/search.md")), "preview must not delete");
 
   applyRemove(report);
@@ -59,19 +59,19 @@ test("text after the section is kept too", () => {
 });
 
 test("an edited agent, your own agents and a different model are left alone", () => {
-  const mine = "---\nname: docs\ndescription: my docs writer\n---\nmine\n";
-  const dir = repo({ ".claude/agents/docs.md": mine });
+  const mine = "---\nname: notes\ndescription: my notes writer\n---\nmine\n";
+  const dir = repo({ ".claude/agents/notes.md": mine });
   applyInit(planInit(dir));
   writeFileSync(join(dir, ".claude/agents/architect.md"), read(dir, ".claude/agents/architect.md") + "\nAlso check the ISR code.\n");
   writeFileSync(join(dir, ".claude/settings.json"), '{ "model": "opus" }\n');
 
   const report = planRemove(dir);
   assert.equal(kinds(report)[".claude/agents/architect.md"], "skipped");
-  assert.equal(kinds(report)[".claude/agents/docs.md"], undefined);
+  assert.equal(kinds(report)[".claude/agents/notes.md"], undefined);
   assert.equal(kinds(report)[".claude/settings.json"], undefined);
   applyRemove(report);
-  assert.deepEqual(readdirSync(join(dir, ".claude/agents")).sort(), ["architect.md", "docs.md"]);
-  assert.equal(read(dir, ".claude/agents/docs.md"), mine);
+  assert.deepEqual(readdirSync(join(dir, ".claude/agents")).sort(), ["architect.md", "notes.md"]);
+  assert.equal(read(dir, ".claude/agents/notes.md"), mine);
   assert.equal(read(dir, ".claude/settings.json"), '{ "model": "opus" }\n');
 });
 

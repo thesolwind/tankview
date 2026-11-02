@@ -46,9 +46,11 @@ down. For each event they append one line to `~/.claude/tankview/events.jsonl`:
 
 - **events**: session start and end, prompts, tool calls and their results,
   subagent start and stop, notifications, turn failures, compaction;
-- **kept**: the session, agent and tool names and ids, and a short preview of
-  each tool input (strings trimmed to 300 characters);
-- **dropped**: tool output; only flags like "this failed" are kept.
+- **kept**: the session, agent and tool names and ids, and, trimmed to 300
+  characters each: tool inputs, your prompts, the start of each final reply,
+  and the start of error messages when a tool fails;
+- **dropped**: the output of tools that succeed (file contents, search
+  results, command output); only flags like the exit code are kept.
 
 The file is rotated at 50 MB. Nothing is sent anywhere.
 

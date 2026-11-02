@@ -2,7 +2,7 @@
 name: search
 description: Read-only repository explorer. Use for substantial exploration — mapping project structure, finding the modules and classes relevant to a task, identifying dependencies and architecture. Skip it for lookups the main session can do in one or two searches.
 tools: Read, Grep, Glob
-model: haiku
+model: {{scout_model}}
 color: cyan
 ---
 You explore the repository and report what is relevant to the task. You never modify files.

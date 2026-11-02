@@ -1,13 +1,16 @@
 // `tankview init <repo>`: installs the multi-model subagent setup into another repository.
-// Plans every change first (dry run by default) and never overwrites existing configuration:
-//   - an agent whose name is already taken gets a proposal file to merge by hand
+// Plans every change first (dry run by default) and never overwrites the user's own work:
+//   - an agent file is replaced only when it is an unedited copy shipped by tankview; any other
+//     agent with the same name gets a proposal file to merge by hand
 //   - CLAUDE.md gets one marked section; text outside the markers is never touched
-//   - settings.json gains "model" only when no model is set
+//   - settings.json gains "model" only when no model is set, or when tankview set it before
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LEGACY_AGENT_FINGERPRINTS } from "./legacy.js";
 
 export const BUILTIN_TEMPLATES = join(dirname(fileURLToPath(import.meta.url)), "..", "templates");
 const START = "<!-- tankview:orchestration:start -->";
@@ -17,10 +20,53 @@ const MARKER_PAIRS = [
   [START, END],
   ["<!-- agents-monitor:orchestration:start -->", "<!-- agents-monitor:orchestration:end -->"],
 ];
-const MAIN_MODEL = "sonnet";
+// Inside the section: which main model init put in settings.json, so a later init or remove only
+// changes that setting while it still holds tankview's value. Sections without it predate presets.
+const MAIN_NOTE = /<!-- tankview:main-model=([^ ]+) -->/;
+const LEGACY_MAIN_MODEL = "sonnet";
 // The Spring checklist is appended to these agents when the repo uses Spring.
 const SPRING_AGENTS = ["architect.md", "audit.md"];
 const SKIP_DIRS = new Set([".git", "node_modules", "build", "target", "dist", ".gradle", ".venv", ".pio", ".idea", "out"]);
+
+export interface Models {
+  main: string; // the main session, written to .claude/settings.json
+  scouts: string; // every subagent except the architect
+  architect: string;
+}
+
+export const PRESETS: Record<string, Models> = {
+  balanced: { main: "sonnet", scouts: "haiku", architect: "opus" },
+  quality: { main: "opus", scouts: "haiku", architect: "fable" },
+};
+export const DEFAULT_PRESET = "balanced";
+
+const MODEL_ALIASES = ["haiku", "sonnet", "opus", "fable"];
+
+/** Accepts the model aliases Claude Code knows, or a full model id such as claude-opus-5-5. */
+export function checkModel(model: string, flag: string): string {
+  if (MODEL_ALIASES.includes(model) || /^claude-[a-z0-9.-]+$/.test(model)) return model;
+  throw new Error(`${flag} must be one of ${MODEL_ALIASES.join(", ")} or a full model id like claude-opus-5-5, not "${model}"`);
+}
+
+const modelName = (m: string) => (MODEL_ALIASES.includes(m) ? m[0].toUpperCase() + m.slice(1) : m);
+
+function fill(text: string, models: Models): string {
+  return text
+    .replaceAll("{{main_model}}", models.main)
+    .replaceAll("{{scout_model}}", models.scouts)
+    .replaceAll("{{architect_model}}", models.architect)
+    .replaceAll("{{main_name}}", modelName(models.main))
+    .replaceAll("{{scout_name}}", modelName(models.scouts))
+    .replaceAll("{{architect_name}}", modelName(models.architect));
+}
+
+const sameText = (a: string, b: string) => a.replace(/\r\n/g, "\n") === b.replace(/\r\n/g, "\n");
+
+/** Hash of an agent file that ignores its model line and line endings. */
+function agentFingerprint(text: string): string {
+  const norm = text.replace(/\r\n/g, "\n").replace(/^model:.*$/m, "model: *").trimEnd();
+  return createHash("sha256").update(norm).digest("hex").slice(0, 16);
+}
 
 export type Kind = "create" | "update" | "unchanged" | "conflict" | "skipped" | "delete";
 
@@ -39,12 +85,49 @@ export interface Report {
   actions: Action[];
 }
 
-export function planInit(targetDir: string, templatesDir = BUILTIN_TEMPLATES): Report {
+interface AgentTemplate {
+  file: string;
+  plain: string;
+  withSpring: string;
+  /** True when `text` is an unedited tankview copy of this agent, in any version and with any model. */
+  isOurs(text: string): boolean;
+}
+
+/** Each agent template, plain and with the Spring checklist appended where it applies. */
+function agentTemplates(templatesDir: string): AgentTemplate[] {
+  const springPath = join(templatesDir, "java-spring.md");
+  const springText = existsSync(springPath) ? readFileSync(springPath, "utf8") : "";
+  return readdirSync(join(templatesDir, "agents")).filter((f) => f.endsWith(".md")).sort().map((file) => {
+    const plain = readFileSync(join(templatesDir, "agents", file), "utf8");
+    const withSpring = springText && SPRING_AGENTS.includes(file) ? plain.trimEnd() + "\n" + springText : plain;
+    const known = new Set([agentFingerprint(plain), agentFingerprint(withSpring), ...(LEGACY_AGENT_FINGERPRINTS[file] ?? [])]);
+    return { file, plain, withSpring, isOurs: (text: string) => known.has(agentFingerprint(text)) };
+  });
+}
+
+function findSection(text: string): { start: number; end: number; endLen: number } | null {
+  const pair = MARKER_PAIRS.find(([a, b]) => text.indexOf(a) >= 0 && text.indexOf(b) > text.indexOf(a));
+  return pair ? { start: text.indexOf(pair[0]), end: text.indexOf(pair[1]), endLen: pair[1].length } : null;
+}
+
+/** The main model a previous init set, read from its CLAUDE.md section; undefined if there's no section. */
+function previousMainModel(claudeMds: string[]): string | undefined {
+  for (const path of claudeMds) {
+    if (!existsSync(path)) continue;
+    const text = readFileSync(path, "utf8");
+    const s = findSection(text);
+    if (s) return MAIN_NOTE.exec(text.slice(s.start, s.end))?.[1] ?? LEGACY_MAIN_MODEL;
+  }
+  return undefined;
+}
+
+const claudeMdPaths = (target: string) => [join(target, "CLAUDE.md"), join(target, ".claude", "CLAUDE.md")];
+
+export function planInit(targetDir: string, templatesDir = BUILTIN_TEMPLATES, models: Models = PRESETS[DEFAULT_PRESET]): Report {
   const target = resolve(targetDir);
   if (!existsSync(target) || !statSync(target).isDirectory()) throw new Error(`Not a directory: ${target}`);
-  const agentsTpl = join(templatesDir, "agents");
   const sectionTpl = join(templatesDir, "claude-section.md");
-  if (!existsSync(agentsTpl) || !existsSync(sectionTpl)) {
+  if (!existsSync(join(templatesDir, "agents")) || !existsSync(sectionTpl)) {
     throw new Error(`Templates folder must contain agents/*.md and claude-section.md: ${templatesDir}`);
   }
 
@@ -53,6 +136,10 @@ export function planInit(targetDir: string, templatesDir = BUILTIN_TEMPLATES): R
   const rel = (p: string) => relative(target, p).replaceAll("\\", "/");
 
   // ---- inspect ----
+  findings.push(`models: main session ${models.main} · subagents ${models.scouts} · architect ${models.architect}`);
+  if (models.architect === "fable" || models.main === "fable") {
+    findings.push("Fable isn't available on every plan; if Claude Code can't use it, run init again with --architect opus");
+  }
   findings.push(existsSync(join(target, ".git")) ? "git repository" : "not a git repository");
   const spring = detectSpring(target);
   findings.push(spring ? `Spring detected (${spring}): adding the Java/Spring checklist` : "no Spring code: Java/Spring checklist not needed");
@@ -65,10 +152,10 @@ export function planInit(targetDir: string, templatesDir = BUILTIN_TEMPLATES): R
   const userAgents = readAgentNames(join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "agents"));
 
   // ---- agents ----
-  for (const { file, plain, withSpring } of agentTemplates(templatesDir)) {
-    const content = spring ? withSpring : plain;
-    const name = frontmatterName(content) ?? file.replace(/\.md$/, "");
-    const dest = join(agentsDir, file);
+  for (const tpl of agentTemplates(templatesDir)) {
+    const content = fill(spring ? tpl.withSpring : tpl.plain, models);
+    const name = frontmatterName(content) ?? tpl.file.replace(/\.md$/, "");
+    const dest = join(agentsDir, tpl.file);
     const taken = existing.get(name);
     const userNote = userAgents.has(name) ? `overrides your user-level agent "${name}" in this project` : undefined;
 
@@ -76,56 +163,57 @@ export function planInit(targetDir: string, templatesDir = BUILTIN_TEMPLATES): R
       actions.push({ rel: rel(dest), abs: dest, kind: "create", before: "", after: content, note: userNote });
       continue;
     }
-    const current = readFileSync(taken ?? dest, "utf8");
-    if (current === content) {
-      actions.push({ rel: rel(taken ?? dest), abs: taken ?? dest, kind: "unchanged", before: current, after: current });
-      continue;
+    const path = taken ?? dest;
+    const current = readFileSync(path, "utf8");
+    if (sameText(current, content)) {
+      actions.push({ rel: rel(path), abs: path, kind: "unchanged", before: current, after: current });
+    } else if (path === dest && tpl.isOurs(current)) {
+      actions.push({ rel: rel(path), abs: path, kind: "update", before: current, after: content, note: "unedited tankview agent: updated" });
+    } else {
+      // Never overwrite the user's work. The proposal lives outside .claude/agents/, where a second
+      // file with the same name would make Claude Code load one of them at random.
+      const proposal = join(target, ".claude", "tankview", "proposed", tpl.file);
+      actions.push({
+        rel: rel(proposal), abs: proposal, kind: "conflict", before: current, after: content,
+        note: `agent "${name}" already exists in ${rel(path)}; merge this proposal by hand`,
+      });
     }
-    // Never overwrite. The proposal lives outside .claude/agents/, where a second file with the
-    // same name would make Claude Code load one of them at random.
-    const proposal = join(target, ".claude", "tankview", "proposed", file);
-    actions.push({
-      rel: rel(proposal), abs: proposal, kind: "conflict", before: current, after: content,
-      note: `agent "${name}" already exists in ${rel(taken ?? dest)}; merge this proposal by hand`,
-    });
   }
 
   // ---- CLAUDE.md ----
-  const section = `${START}\n${readFileSync(sectionTpl, "utf8").trim()}\n${END}\n`;
-  const claudeMd = [join(target, "CLAUDE.md"), join(target, ".claude", "CLAUDE.md")].find((p) => existsSync(p))
-    ?? join(target, "CLAUDE.md");
+  const prevMain = previousMainModel(claudeMdPaths(target));
+  const body = fill(readFileSync(sectionTpl, "utf8").trim(), models);
+  const section = `${START}\n<!-- tankview:main-model=${models.main} -->\n${body}\n${END}\n`;
+  const claudeMd = claudeMdPaths(target).find((p) => existsSync(p)) ?? join(target, "CLAUDE.md");
   if (!existsSync(claudeMd)) {
     findings.push("no CLAUDE.md");
     actions.push({ rel: rel(claudeMd), abs: claudeMd, kind: "create", before: "", after: section });
   } else {
     const before = readFileSync(claudeMd, "utf8");
-    const pair = MARKER_PAIRS.find(([a, b]) => before.indexOf(a) >= 0 && before.indexOf(b) > before.indexOf(a));
+    const s = findSection(before);
     let after: string;
-    if (pair) {
-      const s = before.indexOf(pair[0]);
-      const e = before.indexOf(pair[1]);
+    if (s) {
       findings.push(`${rel(claudeMd)} already has the orchestration section`);
-      const tail = before.slice(e + pair[1].length).replace(/^\r?\n/, "");
-      after = before.slice(0, s) + section + tail;
+      const tail = before.slice(s.end + s.endLen).replace(/^\r?\n/, "");
+      after = before.slice(0, s.start) + section + tail;
     } else {
       findings.push(`existing ${rel(claudeMd)} (${before.split("\n").length} lines) is kept; one section is appended`);
       after = before.replace(/\s*$/, "") + "\n\n" + section;
     }
-    actions.push({ rel: rel(claudeMd), abs: claudeMd, kind: after === before ? "unchanged" : "update", before, after });
+    actions.push({ rel: rel(claudeMd), abs: claudeMd, kind: sameText(after, before) ? "unchanged" : "update", before, after });
   }
 
   // ---- settings.json ----
-  actions.push(planSettings(join(target, ".claude", "settings.json"), rel, findings));
+  actions.push(planSettings(join(target, ".claude", "settings.json"), rel, findings, models.main, prevMain));
 
   return { target, findings, actions };
 }
 
-function planSettings(path: string, rel: (p: string) => string, findings: string[]): Action {
+function planSettings(path: string, rel: (p: string) => string, findings: string[], main: string, prevMain?: string): Action {
   const base = { rel: rel(path), abs: path };
   if (!existsSync(path)) {
     findings.push("no .claude/settings.json");
-    const after = JSON.stringify({ model: MAIN_MODEL }, null, 2) + "\n";
-    return { ...base, kind: "create", before: "", after };
+    return { ...base, kind: "create", before: "", after: JSON.stringify({ model: main }, null, 2) + "\n" };
   }
   const before = readFileSync(path, "utf8");
   let obj: Record<string, unknown>;
@@ -134,24 +222,36 @@ function planSettings(path: string, rel: (p: string) => string, findings: string
   } catch {
     return {
       ...base, kind: "skipped", before, after: before,
-      note: `could not parse it, so it was left alone; add "model": "${MAIN_MODEL}" yourself`,
+      note: `could not parse it, so it was left alone; add "model": "${main}" yourself`,
     };
   }
+  if (obj.model === main) return { ...base, kind: "unchanged", before, after: before };
   if (obj.model !== undefined) {
-    findings.push(`.claude/settings.json already sets model: ${JSON.stringify(obj.model)}`);
-    return obj.model === MAIN_MODEL
-      ? { ...base, kind: "unchanged", before, after: before }
-      : { ...base, kind: "skipped", before, after: before, note: `keeps the existing model ${JSON.stringify(obj.model)}` };
+    if (obj.model === prevMain) {
+      // tankview set this value earlier, so switching it to the new main model is ours to do.
+      let after = before.replace(/("model"\s*:\s*)"[^"]*"/, `$1"${main}"`);
+      try {
+        if ((JSON.parse(after) as Record<string, unknown>).model !== main) throw new Error();
+      } catch {
+        after = JSON.stringify({ ...obj, model: main }, null, 2) + "\n";
+      }
+      return { ...base, kind: "update", before, after, note: `"${prevMain}" was set by tankview; now "${main}"` };
+    }
+    findings.push(`.claude/settings.json already sets model ${JSON.stringify(obj.model)}`);
+    return {
+      ...base, kind: "skipped", before, after: before,
+      note: `keeps your model ${JSON.stringify(obj.model)}; set "${main}" yourself if you want it`,
+    };
   }
   // Insert the key as text so the rest of the file keeps its formatting.
   const indent = /\{\s*\n([ \t]+)"/.exec(before)?.[1] ?? "  ";
   let after = Object.keys(obj).length
-    ? before.replace(/^(\s*\{)(\s*)/, `$1\n${indent}"model": "${MAIN_MODEL}",$2`)
-    : JSON.stringify({ model: MAIN_MODEL }, null, 2) + "\n";
+    ? before.replace(/^(\s*\{)(\s*)/, `$1\n${indent}"model": "${main}",$2`)
+    : JSON.stringify({ model: main }, null, 2) + "\n";
   try {
     JSON.parse(after);
   } catch {
-    after = JSON.stringify({ model: MAIN_MODEL, ...obj }, null, 2) + "\n";
+    after = JSON.stringify({ model: main, ...obj }, null, 2) + "\n";
   }
   return { ...base, kind: "update", before, after };
 }
@@ -165,26 +265,13 @@ export function applyInit(report: Report): Action[] {
   return written;
 }
 
-/** Each agent template, plain and with the Spring checklist appended where it applies. */
-function agentTemplates(templatesDir: string): { file: string; plain: string; withSpring: string }[] {
-  const springPath = join(templatesDir, "java-spring.md");
-  const springText = existsSync(springPath) ? readFileSync(springPath, "utf8") : "";
-  return readdirSync(join(templatesDir, "agents")).filter((f) => f.endsWith(".md")).sort().map((file) => {
-    const plain = readFileSync(join(templatesDir, "agents", file), "utf8");
-    const withSpring = springText && SPRING_AGENTS.includes(file) ? plain.trimEnd() + "\n" + springText : plain;
-    return { file, plain, withSpring };
-  });
-}
-
 // ---- remove ---------------------------------------------------------------------------
-// `tankview remove <repo>` undoes init, touching only what init added: agents that still match
-// a template, the marked CLAUDE.md section, "model": "sonnet", and init's proposal files.
+// `tankview remove <repo>` undoes init, touching only what init added: unedited tankview agents,
+// the marked CLAUDE.md section, the main model init set, and init's proposal files.
 
 const PROPOSAL_DIRS = [join(".claude", "tankview", "proposed"), join(".claude", "agents-monitor", "proposed")];
 // Removed after --apply when they end up empty, deepest first.
 const PRUNE_DIRS = [...PROPOSAL_DIRS, join(".claude", "tankview"), join(".claude", "agents-monitor"), join(".claude", "agents"), ".claude"];
-
-const sameText = (a: string, b: string) => a.replace(/\r\n/g, "\n") === b.replace(/\r\n/g, "\n");
 
 export function planRemove(targetDir: string, templatesDir = BUILTIN_TEMPLATES): Report {
   const target = resolve(targetDir);
@@ -194,13 +281,13 @@ export function planRemove(targetDir: string, templatesDir = BUILTIN_TEMPLATES):
   const actions: Action[] = [];
   const rel = (p: string) => relative(target, p).replaceAll("\\", "/");
 
-  // ---- agents: only exact template copies ----
+  // ---- agents: only unedited tankview copies, whatever their model ----
   const agentsDir = join(target, ".claude", "agents");
-  for (const { file, plain, withSpring } of agentTemplates(templatesDir)) {
-    const path = join(agentsDir, file);
+  for (const tpl of agentTemplates(templatesDir)) {
+    const path = join(agentsDir, tpl.file);
     if (!existsSync(path)) continue;
     const current = readFileSync(path, "utf8");
-    if (sameText(current, plain) || sameText(current, withSpring)) {
+    if (tpl.isOurs(current)) {
       actions.push({ rel: rel(path), abs: path, kind: "delete", before: current, after: "" });
     } else {
       actions.push({
@@ -223,13 +310,14 @@ export function planRemove(targetDir: string, templatesDir = BUILTIN_TEMPLATES):
   }
 
   // ---- CLAUDE.md: cut out the marked section ----
-  for (const claudeMd of [join(target, "CLAUDE.md"), join(target, ".claude", "CLAUDE.md")]) {
+  const prevMain = previousMainModel(claudeMdPaths(target));
+  for (const claudeMd of claudeMdPaths(target)) {
     if (!existsSync(claudeMd)) continue;
     const before = readFileSync(claudeMd, "utf8");
-    const pair = MARKER_PAIRS.find(([a, b]) => before.indexOf(a) >= 0 && before.indexOf(b) > before.indexOf(a));
-    if (!pair) continue;
-    const head = before.slice(0, before.indexOf(pair[0])).replace(/\s+$/, "");
-    const tail = before.slice(before.indexOf(pair[1]) + pair[1].length).replace(/^\s+/, "");
+    const s = findSection(before);
+    if (!s) continue;
+    const head = before.slice(0, s.start).replace(/\s+$/, "");
+    const tail = before.slice(s.end + s.endLen).replace(/^\s+/, "");
     const rest = [head, tail].filter(Boolean).join("\n\n");
     if (rest.trim()) {
       actions.push({ rel: rel(claudeMd), abs: claudeMd, kind: "update", before, after: rest.replace(/\s*$/, "\n") });
@@ -238,9 +326,10 @@ export function planRemove(targetDir: string, templatesDir = BUILTIN_TEMPLATES):
     }
   }
 
-  // ---- settings.json: drop "model": "sonnet" ----
+  // ---- settings.json: drop the main model init set ----
   const settings = join(target, ".claude", "settings.json");
-  if (existsSync(settings)) {
+  const ourMain = prevMain ?? (actions.some((a) => a.kind === "delete") ? LEGACY_MAIN_MODEL : undefined);
+  if (existsSync(settings) && ourMain) {
     const before = readFileSync(settings, "utf8");
     let obj: Record<string, unknown> | null = null;
     try {
@@ -248,25 +337,25 @@ export function planRemove(targetDir: string, templatesDir = BUILTIN_TEMPLATES):
     } catch {
       findings.push(".claude/settings.json isn't valid JSON, so it was left alone");
     }
-    if (obj && obj.model === MAIN_MODEL) {
+    if (obj && obj.model === ourMain) {
       const { model: _, ...others } = obj;
       if (!Object.keys(others).length) {
-        actions.push({ rel: rel(settings), abs: settings, kind: "delete", before, after: "", note: `only set "model": "${MAIN_MODEL}"` });
+        actions.push({ rel: rel(settings), abs: settings, kind: "delete", before, after: "", note: `only set "model": "${ourMain}"` });
       } else {
         // Remove the line as text so the rest keeps its formatting; fall back to re-serializing.
-        let after = before.replace(/^[ \t]*"model"\s*:\s*"sonnet"\s*,?[ \t]*\r?\n/m, "");
+        let after = before.replace(/^[ \t]*"model"\s*:\s*"[^"]*"\s*,?[ \t]*\r?\n/m, "");
         try {
-          JSON.parse(after);
+          if ("model" in JSON.parse(after)) throw new Error();
         } catch {
           after = JSON.stringify(others, null, 2) + "\n";
         }
         actions.push({
           rel: rel(settings), abs: settings, kind: "update", before, after,
-          note: `removes "model": "${MAIN_MODEL}", which init adds; the rest stays`,
+          note: `removes "model": "${ourMain}", which init set; the rest stays`,
         });
       }
     } else if (obj && obj.model !== undefined) {
-      findings.push(`.claude/settings.json sets model ${JSON.stringify(obj.model)}, not tankview's "${MAIN_MODEL}": kept`);
+      findings.push(`.claude/settings.json sets model ${JSON.stringify(obj.model)}, not the "${ourMain}" tankview set: kept`);
     }
   }
 
