@@ -121,6 +121,7 @@ Code:
 | `c` | number of card columns |
 | `[` `]` | page through subagent cards |
 | `$` | show / hide the cost estimate |
+| `y` | copy the selected session's resume command (`cd "<folder>"; claude --resume <id>`) |
 | `q` | quit |
 
 ## Learn more

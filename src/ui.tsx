@@ -2,6 +2,7 @@
 
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { useEffect, useState } from "react";
+import { copyToClipboard } from "./clipboard.js";
 import {
   type Agent,
   type LogEvent,
@@ -63,7 +64,7 @@ const DASHED = {
 };
 
 const LOG_HEIGHT = 14;
-const LEAD_HEIGHT = 7;
+const LEAD_HEIGHT = 8;
 const CARD_HEIGHT = 8;
 const MIN_CARD_WIDTH = 34;
 
@@ -76,6 +77,15 @@ function projectName(s: Session): string {
   if (s.cwd) return s.cwd.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) ?? s.cwd;
   return s.project.split("-").at(-1) ?? s.project;
 }
+
+/** Command that reopens the session; `claude --resume` only finds it from the session's own folder. */
+export function resumeCommand(s: Session): string {
+  const resume = `claude --resume ${s.id}`;
+  // `;` chains in PowerShell, bash and zsh alike.
+  return s.cwd ? `cd "${s.cwd}"; ${resume}` : resume;
+}
+
+type Flash = { session: string; text: string; ok: boolean; until: number };
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -177,7 +187,7 @@ function SessionList({ sessions, selected, height, width: sidebarWidth }: { sess
   );
 }
 
-function Lead({ session: s, width, showCost, sessionCost }: { session: Session; width: number; showCost: boolean; sessionCost: number | null }) {
+function Lead({ session: s, width, showCost, sessionCost, flash }: { session: Session; width: number; showCost: boolean; sessionCost: number | null; flash: Flash | null }) {
   const m = s.main;
   const status = s.agentStatus(m);
   const st = STATUS[status];
@@ -230,6 +240,15 @@ function Lead({ session: s, width, showCost, sessionCost }: { session: Session; 
         <Text color={C.muted}> · {plural(m.files.size, "file")}</Text>
         {m.errors > 0 && <Text color={C.red}>   {m.errors} tool errors</Text>}
         <Text color={C.dim}>   up {fmtDuration(m.started, m.lastTs)}</Text>
+      </Text>
+      <Text wrap="truncate">
+        <Text color={C.dim}>resume </Text>
+        <Text color={C.text}>claude --resume {s.id}</Text>
+        {flash && flash.session === s.id && Date.now() < flash.until ? (
+          <Text color={flash.ok ? C.green : C.orange}>   {flash.text}</Text>
+        ) : (
+          <Text color={C.dim}>   y copies it{s.cwd ? " with a cd to the project" : ""}</Text>
+        )}
       </Text>
     </Box>
   );
@@ -342,6 +361,7 @@ export function App({ store, intervalMs = 500 }: { store: Store; intervalMs?: nu
   const [cols, setCols] = useState(3);
   const [cardPage, setCardPage] = useState(0);
   const [showCost, setShowCost] = useState(false);
+  const [flash, setFlash] = useState<Flash | null>(null);
 
   useEffect(() => {
     store.refresh();
@@ -364,6 +384,11 @@ export function App({ store, intervalMs = 500 }: { store: Store; intervalMs?: nu
     else if (input === "a") setLiveOnly((v) => !v);
     else if (input === "c") setCols((n) => (n === 1 ? 3 : n - 1));
     else if (input === "$") setShowCost((v) => !v);
+    else if (input === "y" && session) {
+      const via = copyToClipboard(resumeCommand(session));
+      const text = via === "terminal" ? "✓ sent to the terminal clipboard (OSC 52)" : "✓ copied to clipboard";
+      setFlash({ session: session.id, text, ok: true, until: Date.now() + 4000 });
+    }
     else if (input === "]") setCardPage((p) => p + 1);
     else if (input === "[") setCardPage((p) => Math.max(0, p - 1));
     else if (key.upArrow || key.downArrow || input === "j" || input === "k") {
@@ -408,7 +433,7 @@ export function App({ store, intervalMs = 500 }: { store: Store; intervalMs?: nu
         <Box flexDirection="column" width={rightWidth} marginLeft={1}>
           {session ? (
             <>
-              <Lead session={session} width={rightWidth} showCost={showCost} sessionCost={sessionCost} />
+              <Lead session={session} width={rightWidth} showCost={showCost} sessionCost={sessionCost} flash={flash} />
               <SwarmLine session={session} agents={agents} showCost={showCost} />
               <Box flexDirection="row" flexWrap="wrap" height={cardsHeight} overflow="hidden">
                 {agents.slice(page * perPage, (page + 1) * perPage).map((a) => (
@@ -428,6 +453,7 @@ export function App({ store, intervalMs = 500 }: { store: Store; intervalMs?: nu
         <Text color={C.purple}>a</Text><Text color={C.muted}> {liveOnly ? "show all" : "live only"}  </Text>
         <Text color={C.purple}>c</Text><Text color={C.muted}> columns  </Text>
         <Text color={C.purple}>$</Text><Text color={C.muted}> {showCost ? "hide cost" : "cost"}  </Text>
+        <Text color={C.purple}>y</Text><Text color={C.muted}> copy resume  </Text>
         {pages > 1 && (
           <>
             <Text color={C.purple}>[ ]</Text>
